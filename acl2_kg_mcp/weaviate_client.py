@@ -255,6 +255,7 @@ def search_summaries(query: str, mode: str = "semantic",
             "how": p.get("how_summary", ""),
             "source_file": p.get("source_file", ""),
             "cell_index": p.get("cell_index", -1),
+            "summary_index": p.get("summary_index", 0),
             "symbol_names": p.get("symbol_names", []),
             "distance": dist,
         })
@@ -502,13 +503,11 @@ def get_symbol(qualified_name: str, *,
                 [], total=0, offset=deps_offset, limit=deps_limit,
             )
 
-    # Cell summary
+    # Cell summaries (may be multiple per cell)
     if "summary" in include and "definition" in result:
         defn = result["definition"]
         sums = _get_cell_summaries(client, defn["notebook_source"])
-        s = sums.get(defn["cell_index"])
-        if s:
-            result["summary"] = s
+        result["summaries"] = sums.get(defn["cell_index"], [])
 
     return result
 
@@ -599,12 +598,10 @@ def get_notebook(source_file: str, *,
         total_cells = len(all_cells)
         paged_cells = all_cells[cell_offset:cell_offset + cell_limit]
 
-        # Attach cell summaries
+        # Attach cell summaries (may be multiple per cell)
         cell_sums = _get_cell_summaries(client, source_file)
         for cell in paged_cells:
-            s = cell_sums.get(cell["cell_index"])
-            if s:
-                cell["summary"] = s
+            cell["summaries"] = cell_sums.get(cell["cell_index"], [])
 
         result["cells"] = _envelope(
             paged_cells, total=total_cells,
@@ -659,11 +656,9 @@ def get_cell(source_file: str, cell_index: int) -> dict[str, Any] | None:
         "execute_result": p.get("execute_result") or "",
     }
 
-    # Cell summary
+    # Cell summaries (may be multiple per cell)
     sums = _get_cell_summaries(client, source_file)
-    s = sums.get(cell_index)
-    if s:
-        result["summary"] = s
+    result["summaries"] = sums.get(cell_index, [])
 
     return result
 
@@ -703,6 +698,7 @@ def get_summary(ref_key: str) -> dict[str, Any] | None:
         "how": p.get("how_summary", ""),
         "source_file": p.get("source_file", ""),
         "cell_index": p.get("cell_index", -1),
+        "summary_index": p.get("summary_index", 0),
         "directory": p.get("directory", ""),
         "symbol_names": p.get("symbol_names", []),
     }
@@ -758,8 +754,13 @@ def list_notebooks(filter_path: str | None = None, *,
 # ---------------------------------------------------------------------------
 
 def _get_cell_summaries(client: weaviate.WeaviateClient,
-                        source_file: str) -> dict[int, dict[str, str]]:
-    """Fetch all cell-level summaries for a notebook."""
+                        source_file: str) -> dict[int, list[dict[str, Any]]]:
+    """Fetch all cell-level summaries for a notebook.
+
+    Returns ``dict[int, list[dict]]`` — a list of summary dicts per
+    cell_index, sorted by ``summary_index``.  Each dict contains
+    ``what``, ``why``, ``how``, and ``summary_index``.
+    """
     try:
         col = client.collections.get("ACL2Summary")
     except Exception:
@@ -773,18 +774,22 @@ def _get_cell_summaries(client: weaviate.WeaviateClient,
         limit=10000,
     )
 
-    sums: dict[int, dict[str, str]] = {}
+    sums: dict[int, list[dict[str, Any]]] = {}
     for obj in resp.objects:
         p = obj.properties
         if p.get("source_file") != source_file:
             continue
         idx = p.get("cell_index", -1)
         if idx >= 0:
-            sums[idx] = {
+            sums.setdefault(idx, []).append({
                 "what": p.get("what_summary", ""),
                 "why": p.get("why_summary", ""),
                 "how": p.get("how_summary", ""),
-            }
+                "summary_index": p.get("summary_index", 0),
+            })
+    # Sort each cell's summaries by summary_index
+    for lst in sums.values():
+        lst.sort(key=lambda s: s["summary_index"])
     return sums
 
 

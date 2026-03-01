@@ -112,7 +112,8 @@ async def list_tools() -> list[Tool]:
                 "Get full details for an ACL2 symbol by its qualified name "
                 "(e.g. ACL2::APPEND, COMMON-LISP::CAR). Returns the symbol's kind, "
                 "package, defining code, dependencies (what it calls), "
-                "dependents (what calls it), and LLM-generated summary. "
+                "dependents (what calls it), and LLM-generated summaries "
+                "(a list of what/why/how dicts, one per distinct idea). "
                 "Dependencies and dependents are paginated."
             ),
             inputSchema={
@@ -193,7 +194,8 @@ async def list_tools() -> list[Tool]:
                 "Get a single cell's full content from an ACL2 notebook. "
                 "Returns the complete code or comment text, cell type, package, "
                 "execution count, defined symbols, stdout, execute_result, "
-                "and LLM-generated summary (what/why/how) if available."
+                "and LLM-generated summaries (a list of what/why/how dicts, "
+                "one per distinct idea) if available."
             ),
             inputSchema={
                 "type": "object",
@@ -223,7 +225,7 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "ref_key": {
                         "type": "string",
-                        "description": "Summary reference key, e.g. 'books/defsort/defsort.lisp' (notebook) or 'books/defsort/defsort.lisp:5' (cell)",
+                        "description": "Summary reference key, e.g. 'books/defsort/defsort.lisp' (notebook) or 'books/defsort/defsort.lisp:5:0' (cell, summary_index=0)",
                     },
                 },
                 "required": ["ref_key"],

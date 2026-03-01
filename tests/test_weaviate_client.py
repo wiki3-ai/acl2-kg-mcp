@@ -268,9 +268,9 @@ class TestGetSymbol:
         s = wc.get_symbol("ACL2::BRR@",
                           include=["definition", "summary"])
         assert s is not None
-        if "summary" in s:
-            assert "what" in s["summary"]
-            assert "why" in s["summary"]
+        if "summaries" in s and s["summaries"]:
+            assert "what" in s["summaries"][0]
+            assert "why" in s["summaries"][0]
 
     def test_not_found(self) -> None:
         s = wc.get_symbol("NONEXISTENT::ZZZZZ")
