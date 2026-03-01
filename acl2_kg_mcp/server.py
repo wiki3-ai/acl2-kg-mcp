@@ -101,6 +101,10 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "(docs target only) Filter by paper title substring",
                     },
+                    "version": {
+                        "type": "string",
+                        "description": "(summary target only) Filter summaries by version label, e.g. 'v1-qwen3-coder'",
+                    },
                 },
                 "required": ["query"],
             },
@@ -145,6 +149,10 @@ async def list_tools() -> list[Tool]:
                         "minimum": 0,
                         "description": "Offset for paging through dependencies/dependents",
                     },
+                    "version": {
+                        "type": "string",
+                        "description": "Filter summaries by version label, e.g. 'v1-qwen3-coder'",
+                    },
                 },
                 "required": ["qualified_name"],
             },
@@ -183,6 +191,10 @@ async def list_tools() -> list[Tool]:
                         "minimum": 0,
                         "description": "Offset for paging through cells",
                     },
+                    "version": {
+                        "type": "string",
+                        "description": "Filter summaries by version label, e.g. 'v1-qwen3-coder'",
+                    },
                 },
                 "required": ["source_file"],
             },
@@ -207,6 +219,10 @@ async def list_tools() -> list[Tool]:
                     "cell_index": {
                         "type": "integer",
                         "description": "0-based cell index within the notebook",
+                    },
+                    "version": {
+                        "type": "string",
+                        "description": "Filter summaries by version label, e.g. 'v1-qwen3-coder'",
                     },
                 },
                 "required": ["source_file", "cell_index"],
@@ -418,9 +434,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     wc.search_cells(query, target=target, mode=mode,
                                     offset=offset, limit=limit))
             elif target == "summary":
+                version = arguments.get("version")
                 return _json_response(
                     wc.search_summaries(query, mode=mode,
-                                        offset=offset, limit=limit))
+                                        offset=offset, limit=limit,
+                                        version=version))
             elif target == "docs":
                 paper_filter = arguments.get("paper_filter")
                 return _json_response(
@@ -447,10 +465,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                                      "dependents", "summary"])
             deps_limit = min(int(arguments.get("deps_limit", 50)), 500)
             deps_offset = max(int(arguments.get("deps_offset", 0)), 0)
+            version = arguments.get("version")
 
             result = wc.get_symbol(
                 qn, include=include,
                 deps_offset=deps_offset, deps_limit=deps_limit,
+                version=version,
             )
             if result is None:
                 return _error_response(f"Symbol not found: {qn}")
@@ -461,11 +481,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
             include_cells = arguments.get("include_cells", True)
             cell_limit = min(int(arguments.get("cell_limit", 50)), 500)
             cell_offset = max(int(arguments.get("cell_offset", 0)), 0)
+            version = arguments.get("version")
 
             result = wc.get_notebook(
                 source_file,
                 include_cells=include_cells,
                 cell_offset=cell_offset, cell_limit=cell_limit,
+                version=version,
             )
             if result is None:
                 return _error_response(f"Notebook not found: {source_file}")
@@ -474,8 +496,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
         elif name == "kg_get_cell":
             source_file = arguments["source_file"]
             cell_index = int(arguments["cell_index"])
+            version = arguments.get("version")
 
-            result = wc.get_cell(source_file, cell_index)
+            result = wc.get_cell(source_file, cell_index, version=version)
             if result is None:
                 return _error_response(
                     f"Cell not found: {source_file} cell {cell_index}")

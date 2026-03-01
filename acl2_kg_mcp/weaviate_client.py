@@ -226,20 +226,31 @@ def search_cells(query: str, target: str = "code",
 def search_summaries(query: str, mode: str = "semantic",
                      vector: str = "what_vector",
                      offset: int = 0, limit: int = 20,
+                     version: str | None = None,
                      ) -> dict[str, Any]:
-    """Search ACL2Summary."""
+    """Search ACL2Summary, optionally filtered by version."""
     client = get_client()
     col = client.collections.get("ACL2Summary")
 
+    version_filter = None
+    if version:
+        version_filter = Filter.by_property("version").equal(version)
+
     if mode == "semantic":
-        resp = col.query.near_text(
-            query=query, limit=limit, offset=offset,
-            target_vector=vector,
-            return_metadata=MetadataQuery(distance=True),
-        )
+        kwargs: dict[str, Any] = {
+            "query": query, "limit": limit, "offset": offset,
+            "target_vector": vector,
+            "return_metadata": MetadataQuery(distance=True),
+        }
+        if version_filter:
+            kwargs["filters"] = version_filter
+        resp = col.query.near_text(**kwargs)
     else:
+        filt = Filter.by_property("what_summary").like(f"*{query}*")
+        if version_filter:
+            filt = filt & version_filter
         resp = col.query.fetch_objects(
-            filters=Filter.by_property("what_summary").like(f"*{query}*"),
+            filters=filt,
             limit=limit, offset=offset,
         )
 
@@ -257,6 +268,8 @@ def search_summaries(query: str, mode: str = "semantic",
             "cell_index": p.get("cell_index", -1),
             "summary_index": p.get("summary_index", 0),
             "symbol_names": p.get("symbol_names", []),
+            "version": p.get("version", ""),
+            "symbol": p.get("symbol", ""),
             "distance": dist,
         })
     return _envelope(results, total=None, offset=offset, limit=limit)
@@ -399,6 +412,7 @@ def get_symbol(qualified_name: str, *,
                include: list[str] | None = None,
                deps_offset: int = 0,
                deps_limit: int = 50,
+               version: str | None = None,
                ) -> dict[str, Any] | None:
     """Get full symbol detail with paged deps/dependents.
 
@@ -506,7 +520,7 @@ def get_symbol(qualified_name: str, *,
     # Cell summaries (may be multiple per cell)
     if "summary" in include and "definition" in result:
         defn = result["definition"]
-        sums = _get_cell_summaries(client, defn["notebook_source"])
+        sums = _get_cell_summaries(client, defn["notebook_source"], version=version)
         result["summaries"] = sums.get(defn["cell_index"], [])
 
     return result
@@ -520,6 +534,7 @@ def get_notebook(source_file: str, *,
                  include_cells: bool = True,
                  cell_offset: int = 0,
                  cell_limit: int = 50,
+                 version: str | None = None,
                  ) -> dict[str, Any] | None:
     """Get notebook metadata + paged cell listing."""
     client = get_client()
@@ -549,7 +564,7 @@ def get_notebook(source_file: str, *,
     }
 
     # Notebook summary
-    nb_summary = _get_notebook_summary(client, source_file)
+    nb_summary = _get_notebook_summary(client, source_file, version=version)
     if nb_summary:
         result["summary"] = nb_summary
 
@@ -599,7 +614,7 @@ def get_notebook(source_file: str, *,
         paged_cells = all_cells[cell_offset:cell_offset + cell_limit]
 
         # Attach cell summaries (may be multiple per cell)
-        cell_sums = _get_cell_summaries(client, source_file)
+        cell_sums = _get_cell_summaries(client, source_file, version=version)
         for cell in paged_cells:
             cell["summaries"] = cell_sums.get(cell["cell_index"], [])
 
@@ -615,7 +630,8 @@ def get_notebook(source_file: str, *,
 # kg_get_cell
 # ---------------------------------------------------------------------------
 
-def get_cell(source_file: str, cell_index: int) -> dict[str, Any] | None:
+def get_cell(source_file: str, cell_index: int,
+             version: str | None = None) -> dict[str, Any] | None:
     """Get a single cell's full content + summary."""
     client = get_client()
     cell_col = client.collections.get("ACL2Cell")
@@ -657,7 +673,7 @@ def get_cell(source_file: str, cell_index: int) -> dict[str, Any] | None:
     }
 
     # Cell summaries (may be multiple per cell)
-    sums = _get_cell_summaries(client, source_file)
+    sums = _get_cell_summaries(client, source_file, version=version)
     result["summaries"] = sums.get(cell_index, [])
 
     return result
@@ -701,6 +717,8 @@ def get_summary(ref_key: str) -> dict[str, Any] | None:
         "summary_index": p.get("summary_index", 0),
         "directory": p.get("directory", ""),
         "symbol_names": p.get("symbol_names", []),
+        "version": p.get("version", ""),
+        "symbol": p.get("symbol", ""),
     }
 
 
@@ -710,6 +728,7 @@ def get_summary(ref_key: str) -> dict[str, Any] | None:
 
 def list_notebooks(filter_path: str | None = None, *,
                    offset: int = 0, limit: int = 50,
+                   version: str | None = None,
                    ) -> dict[str, Any]:
     """List/filter notebooks with optional summaries."""
     client = get_client()
@@ -741,7 +760,7 @@ def list_notebooks(filter_path: str | None = None, *,
             "code_cell_count": nb.get("code_cell_count", 0),
             "is_bootstrap": nb.get("is_bootstrap", False),
         }
-        s = _get_notebook_summary(client, sf)
+        s = _get_notebook_summary(client, sf, version=version)
         if s and s.get("what"):
             entry["summary_what"] = s["what"]
         results.append(entry)
@@ -754,25 +773,28 @@ def list_notebooks(filter_path: str | None = None, *,
 # ---------------------------------------------------------------------------
 
 def _get_cell_summaries(client: weaviate.WeaviateClient,
-                        source_file: str) -> dict[int, list[dict[str, Any]]]:
+                        source_file: str,
+                        version: str | None = None,
+                        ) -> dict[int, list[dict[str, Any]]]:
     """Fetch all cell-level summaries for a notebook.
 
     Returns ``dict[int, list[dict]]`` — a list of summary dicts per
     cell_index, sorted by ``summary_index``.  Each dict contains
-    ``what``, ``why``, ``how``, and ``summary_index``.
+    ``what``, ``why``, ``how``, ``summary_index``, ``version``, ``symbol``.
     """
     try:
         col = client.collections.get("ACL2Summary")
     except Exception:
         return {}
 
-    resp = col.query.fetch_objects(
-        filters=(
-            Filter.by_property("scope").equal("cell")
-            & Filter.by_property("source_file").equal(source_file)
-        ),
-        limit=10000,
+    filt = (
+        Filter.by_property("scope").equal("cell")
+        & Filter.by_property("source_file").equal(source_file)
     )
+    if version:
+        filt = filt & Filter.by_property("version").equal(version)
+
+    resp = col.query.fetch_objects(filters=filt, limit=10000)
 
     sums: dict[int, list[dict[str, Any]]] = {}
     for obj in resp.objects:
@@ -786,6 +808,8 @@ def _get_cell_summaries(client: weaviate.WeaviateClient,
                 "why": p.get("why_summary", ""),
                 "how": p.get("how_summary", ""),
                 "summary_index": p.get("summary_index", 0),
+                "version": p.get("version", ""),
+                "symbol": p.get("symbol", ""),
             })
     # Sort each cell's summaries by summary_index
     for lst in sums.values():
@@ -794,20 +818,23 @@ def _get_cell_summaries(client: weaviate.WeaviateClient,
 
 
 def _get_notebook_summary(client: weaviate.WeaviateClient,
-                          source_file: str) -> dict[str, str] | None:
+                          source_file: str,
+                          version: str | None = None,
+                          ) -> dict[str, str] | None:
     """Fetch the notebook-level summary."""
     try:
         col = client.collections.get("ACL2Summary")
     except Exception:
         return None
 
-    resp = col.query.fetch_objects(
-        filters=(
-            Filter.by_property("scope").equal("notebook")
-            & Filter.by_property("source_file").equal(source_file)
-        ),
-        limit=1,
+    filt = (
+        Filter.by_property("scope").equal("notebook")
+        & Filter.by_property("source_file").equal(source_file)
     )
+    if version:
+        filt = filt & Filter.by_property("version").equal(version)
+
+    resp = col.query.fetch_objects(filters=filt, limit=1)
     for obj in resp.objects:
         p = obj.properties
         if p.get("source_file") == source_file:
@@ -815,6 +842,7 @@ def _get_notebook_summary(client: weaviate.WeaviateClient,
                 "what": p.get("what_summary", ""),
                 "why": p.get("why_summary", ""),
                 "how": p.get("how_summary", ""),
+                "version": p.get("version", ""),
             }
     return None
 
