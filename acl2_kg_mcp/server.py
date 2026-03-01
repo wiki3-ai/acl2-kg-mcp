@@ -306,6 +306,27 @@ async def list_tools() -> list[Tool]:
             },
             annotations={"readOnlyHint": True},
         ),
+        Tool(
+            name="kg_get_include_book",
+            description=(
+                "Map an ACL2 notebook source file to its (include-book ...) form. "
+                "Given a source_file path from the KG (e.g. 'books/defsort/defsort.lisp'), "
+                "returns the correct ACL2 include-book command with :dir :system "
+                "for community books. Use this to bridge from KG exploration to "
+                "loading code in a live ACL2 session."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source_file": {
+                        "type": "string",
+                        "description": "Notebook source_file path from the KG",
+                    },
+                },
+                "required": ["source_file"],
+            },
+            annotations={"readOnlyHint": True},
+        ),
     ]
 
 
@@ -424,6 +445,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
             return _json_response(
                 wc.search_docs(query, mode=mode, paper_filter=paper_filter,
                                offset=offset, limit=limit))
+
+        elif name == "kg_get_include_book":
+            source_file = arguments["source_file"]
+            result = wc.get_include_book(source_file)
+            if result is None:
+                return _error_response(f"Notebook not found: {source_file}")
+            return _json_response(result)
 
         else:
             return _error_response(f"Unknown tool: {name}")

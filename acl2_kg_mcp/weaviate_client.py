@@ -144,7 +144,12 @@ def get_stats() -> dict[str, Any]:
 def search_symbols(query: str, mode: str = "semantic",
                    offset: int = 0, limit: int = 20,
                    ) -> dict[str, Any]:
-    """Search ACL2Symbol by semantic or keyword."""
+    """Search ACL2Symbol by semantic or keyword.
+
+    In semantic mode, if the best symbol-vector results are mediocre
+    (distance > 0.45), we also search code cells and harvest their
+    defined symbols to provide better-contextualised hits.
+    """
     client = get_client()
     sym = client.collections.get("ACL2Symbol")
 
@@ -169,6 +174,16 @@ def search_symbols(query: str, mode: str = "semantic",
             "package": obj.properties.get("package", ""),
             "distance": dist,
         })
+
+    # Enrichment: if semantic symbol results are weak, supplement with
+    # symbols discovered via code-cell search (which embeds richer text).
+    if (mode == "semantic" and results
+            and results[0]["distance"] is not None
+            and results[0]["distance"] > 0.45):
+        enriched = _enrich_symbol_search_via_cells(query, limit, results)
+        if enriched:
+            results = enriched
+
     return _envelope(results, total=None, offset=offset, limit=limit)
 
 
@@ -402,8 +417,17 @@ def get_symbol(qualified_name: str, *,
                  for r in rev_resp.objects],
                 key=lambda x: x["qualified_name"],
             )
+            # Get total count via aggregate
+            try:
+                agg = sym_col.aggregate.over_all(
+                    filters=Filter.by_ref("dependsOn").by_id().equal(symbol_uuid),
+                    total_count=True,
+                )
+                rev_total: int | None = agg.total_count
+            except Exception:
+                rev_total = None
             result["dependents"] = _envelope(
-                rev_deps, total=None,
+                rev_deps, total=rev_total,
                 offset=deps_offset, limit=deps_limit,
             )
         except Exception:
@@ -721,3 +745,129 @@ def _get_notebook_summary(client: weaviate.WeaviateClient,
                 "how": p.get("how_summary", ""),
             }
     return None
+
+
+# ---------------------------------------------------------------------------
+# Enrichment: supplement symbol search with code-cell hits
+# ---------------------------------------------------------------------------
+
+def _enrich_symbol_search_via_cells(
+        query: str, limit: int,
+        original_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Search code cells semantically, then harvest defined symbols.
+
+    Returns an enriched result list ordered by the cell distance,
+    or an empty list if enrichment didn't help.
+    """
+    client = get_client()
+    cell_col = client.collections.get("ACL2Cell")
+
+    try:
+        resp = cell_col.query.near_text(
+            query=query, limit=limit * 2,
+            target_vector="code_vector",
+            return_metadata=MetadataQuery(distance=True),
+            return_references=[
+                QueryReference(link_on="definesSymbols",
+                               return_properties=["qualified_name", "kind",
+                                                   "package"]),
+            ],
+        )
+    except Exception:
+        return []
+
+    seen: set[str] = set()
+    enriched: list[dict[str, Any]] = []
+    for obj in resp.objects:
+        syms_ref = obj.references.get("definesSymbols")
+        if not syms_ref or not syms_ref.objects:
+            continue
+        cell_dist = getattr(obj.metadata, "distance", None) if obj.metadata else None
+        for sym in syms_ref.objects:
+            qn = sym.properties["qualified_name"]
+            if qn in seen:
+                continue
+            seen.add(qn)
+            enriched.append({
+                "qualified_name": qn,
+                "kind": sym.properties.get("kind", ""),
+                "package": sym.properties.get("package", ""),
+                "distance": cell_dist,
+                "source": "code_cell",
+            })
+            if len(enriched) >= limit:
+                break
+        if len(enriched) >= limit:
+            break
+
+    # Only use enriched results if they're better than the originals
+    if (enriched
+            and enriched[0]["distance"] is not None
+            and enriched[0]["distance"] < original_results[0]["distance"]):
+        return enriched[:limit]
+    return []
+
+
+# ---------------------------------------------------------------------------
+# kg_get_include_book
+# ---------------------------------------------------------------------------
+
+def get_include_book(source_file: str) -> dict[str, Any] | None:
+    """Map a notebook source_file to its (include-book ...) form.
+
+    ACL2 include-book paths are relative to the :dir argument.
+    For community books (books/...), we strip the 'books/' prefix and
+    the '.lisp' extension and use :dir :system.
+    """
+    client = get_client()
+    nb_col = client.collections.get("ACL2Notebook")
+
+    # Verify the notebook exists
+    resp = nb_col.query.fetch_objects(
+        filters=Filter.by_property("source_file").equal(source_file),
+        limit=5,
+    )
+    notebook = None
+    for obj in resp.objects:
+        if obj.properties.get("source_file") == source_file:
+            notebook = obj.properties
+            break
+    if notebook is None:
+        return None
+
+    sf = notebook["source_file"]
+    # Strip .lisp extension
+    if sf.endswith(".lisp"):
+        stem = sf[:-5]
+    else:
+        stem = sf
+
+    # Determine dir keyword and book path
+    if stem.startswith("books/"):
+        book_path = stem[6:]  # strip "books/"
+        dir_kw = ":system"
+    else:
+        book_path = stem
+        dir_kw = None
+
+    # Build the include-book form
+    if dir_kw:
+        form = f'(include-book "{book_path}" :dir {dir_kw})'
+    else:
+        form = f'(include-book "{book_path}")'
+
+    # Also gather portcullis events if present
+    portcullis = notebook.get("portcullis") or []
+
+    result: dict[str, Any] = {
+        "source_file": sf,
+        "include_book": form,
+        "book_path": book_path,
+    }
+    if dir_kw:
+        result["dir"] = dir_kw
+    if portcullis:
+        result["portcullis"] = portcullis
+
+    return result

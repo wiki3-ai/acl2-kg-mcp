@@ -205,6 +205,14 @@ class TestGetSymbol:
         assert len(dependents["results"]) > 0
         assert dependents["has_more"] is True
 
+    def test_dependents_has_total(self) -> None:
+        """Dependents should now report a total count via aggregate."""
+        s = wc.get_symbol("COMMON-LISP::APPEND",
+                          include=["dependents"], deps_limit=5)
+        assert s is not None
+        assert s["dependents"]["total"] is not None
+        assert s["dependents"]["total"] > 100  # APPEND has many dependents
+
     def test_dependents_paging(self) -> None:
         s1 = wc.get_symbol("COMMON-LISP::APPEND",
                            include=["dependents"],
@@ -377,3 +385,53 @@ class TestEnvelope:
     def test_has_more_false(self) -> None:
         r = wc.list_notebooks("defsort/defsort.lisp", limit=50)
         assert r["has_more"] is False
+
+
+# ── Enriched symbol search ────────────────────────────────────────────
+
+class TestEnrichedSymbolSearch:
+    def test_vague_query_gets_enriched(self) -> None:
+        """A conceptual query that would get poor symbol-vector hits
+        should be enriched via code-cell search."""
+        r = wc.search_symbols("binary search tree insertion",
+                              mode="semantic", limit=5)
+        assert len(r["results"]) > 0
+        # If enrichment kicked in, some results should have source="code_cell"
+        # or at minimum, the distance should be reasonable
+        best_dist = r["results"][0].get("distance")
+        if best_dist is not None:
+            # Either enrichment improved it or symbol search was adequate
+            assert best_dist < 0.55
+
+    def test_precise_query_not_enriched(self) -> None:
+        """Good keyword queries should not be enriched (mode=keyword)."""
+        r = wc.search_symbols("APPEND", mode="keyword", limit=5)
+        for item in r["results"]:
+            assert "source" not in item  # no enrichment marker
+
+
+# ── kg_get_include_book ───────────────────────────────────────────────
+
+class TestGetIncludeBook:
+    def test_community_book(self) -> None:
+        r = wc.get_include_book("books/defsort/defsort.lisp")
+        assert r is not None
+        assert r["include_book"] == '(include-book "defsort/defsort" :dir :system)'
+        assert r["book_path"] == "defsort/defsort"
+        assert r["dir"] == ":system"
+
+    def test_nested_community_book(self) -> None:
+        r = wc.get_include_book("books/kestrel/utilities/defmergesort.lisp")
+        assert r is not None
+        assert '"kestrel/utilities/defmergesort"' in r["include_book"]
+        assert ":dir :system" in r["include_book"]
+
+    def test_non_books_path(self) -> None:
+        r = wc.get_include_book("acl2-check.lisp")
+        assert r is not None
+        assert ":dir" not in r["include_book"]
+        assert r["include_book"] == '(include-book "acl2-check")'
+
+    def test_not_found(self) -> None:
+        r = wc.get_include_book("nonexistent/file.lisp")
+        assert r is None

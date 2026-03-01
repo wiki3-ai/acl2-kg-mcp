@@ -40,14 +40,14 @@ def _parse(result: Any) -> dict:
 # ── list_tools ────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_list_tools_returns_eight() -> None:
+async def test_list_tools_returns_nine() -> None:
     tools = await list_tools()
-    assert len(tools) == 8
+    assert len(tools) == 9
     names = {t.name for t in tools}
     assert names == {
         "kg_stats", "kg_search", "kg_get_symbol", "kg_get_notebook",
         "kg_get_cell", "kg_get_summary", "kg_list_notebooks",
-        "kg_search_docs",
+        "kg_search_docs", "kg_get_include_book",
     }
 
 @pytest.mark.asyncio
@@ -284,3 +284,33 @@ async def test_unknown_tool() -> None:
 async def test_missing_required_arg() -> None:
     data = _parse(await call_tool("kg_search", {}))  # missing "query"
     assert "error" in data
+
+
+# ── kg_get_include_book ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_kg_get_include_book() -> None:
+    data = _parse(await call_tool("kg_get_include_book", {
+        "source_file": "books/defsort/defsort.lisp",
+    }))
+    assert data["include_book"] == '(include-book "defsort/defsort" :dir :system)'
+
+@pytest.mark.asyncio
+async def test_kg_get_include_book_not_found() -> None:
+    data = _parse(await call_tool("kg_get_include_book", {
+        "source_file": "nonexistent/file.lisp",
+    }))
+    assert "error" in data
+
+
+# ── Dependents total ──────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_kg_get_symbol_dependents_total() -> None:
+    data = _parse(await call_tool("kg_get_symbol", {
+        "qualified_name": "COMMON-LISP::APPEND",
+        "include": ["dependents"],
+        "deps_limit": 5,
+    }))
+    assert data["dependents"]["total"] is not None
+    assert data["dependents"]["total"] > 100
