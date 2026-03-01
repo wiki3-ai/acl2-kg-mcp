@@ -31,7 +31,7 @@ class TestGetStats:
     def test_returns_all_collections(self) -> None:
         stats = wc.get_stats()
         for name in ("ACL2Notebook", "ACL2Cell", "ACL2Symbol",
-                      "ACL2Summary", "DoclingPapers"):
+                      "ACL2Summary", "DoclingPapers", "ACL2Docs"):
             assert name in stats["collections"], f"Missing collection {name}"
 
     def test_counts_are_positive(self) -> None:
@@ -153,6 +153,45 @@ class TestSearchDocs:
                            paper_filter="HOList", limit=5)
         for item in r["results"]:
             assert "HOList" in item["paper_title"]
+
+
+# ── kg_search: acl2_docs ─────────────────────────────────────────────
+
+class TestSearchACL2Docs:
+    def test_semantic(self) -> None:
+        r = wc.search_acl2_docs("guard verification", mode="semantic", limit=5)
+        assert len(r["results"]) > 0
+        for item in r["results"]:
+            assert "title" in item
+            assert "source_path" in item
+            assert "doc_type" in item
+            assert "text" in item
+            assert item["distance"] is not None
+
+    def test_keyword(self) -> None:
+        r = wc.search_acl2_docs("defun", mode="keyword", limit=5)
+        assert len(r["results"]) > 0
+
+    def test_doc_type_filter(self) -> None:
+        r = wc.search_acl2_docs("ACL2", mode="semantic",
+                                doc_type="readme", limit=5)
+        for item in r["results"]:
+            assert item["doc_type"] == "readme"
+
+    def test_title_filter(self) -> None:
+        r = wc.search_acl2_docs("verification", mode="semantic",
+                                title_filter="kestrel", limit=5)
+        for item in r["results"]:
+            assert "kestrel" in item["title"].lower()
+
+    def test_pagination(self) -> None:
+        page1 = wc.search_acl2_docs("theorem", mode="semantic",
+                                     limit=3, offset=0)
+        page2 = wc.search_acl2_docs("theorem", mode="semantic",
+                                     limit=3, offset=3)
+        texts1 = {r["text"][:50] for r in page1["results"]}
+        texts2 = {r["text"][:50] for r in page2["results"]}
+        assert texts1.isdisjoint(texts2), "Pages overlap"
 
 
 # ── kg_get_symbol ─────────────────────────────────────────────────────

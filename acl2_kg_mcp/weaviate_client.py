@@ -97,7 +97,7 @@ def get_stats() -> dict[str, Any]:
     stats: dict[str, Any] = {"collections": {}}
 
     for name in ("ACL2Notebook", "ACL2Cell", "ACL2Symbol",
-                 "ACL2Summary", "DoclingPapers"):
+                 "ACL2Summary", "DoclingPapers", "ACL2Docs"):
         try:
             col = client.collections.get(name)
             agg = col.aggregate.over_all(total_count=True)
@@ -317,6 +317,73 @@ def search_docs(query: str, mode: str = "semantic",
         results.append({
             "paper_title": p.get("paper_title", ""),
             "source": p.get("source", ""),
+            "text": p.get("text", ""),
+            "distance": dist,
+        })
+    return _envelope(results, total=None, offset=offset, limit=limit)
+
+
+def search_acl2_docs(query: str, mode: str = "semantic",
+                    doc_type: str | None = None,
+                    title_filter: str | None = None,
+                    offset: int = 0, limit: int = 10,
+                    ) -> dict[str, Any]:
+    """Search ACL2Docs (READMEs, HTML docs, and PDFs from the ACL2 source tree).
+
+    This collection uses client-side Ollama embeddings (no Weaviate vectorizer),
+    so semantic search requires embedding the query and using near_vector.
+    Falls back to keyword search when embeddings are unavailable.
+    """
+    client = get_client()
+    col = client.collections.get("ACL2Docs")
+
+    filt = None
+    if doc_type:
+        filt = Filter.by_property("doc_type").equal(doc_type)
+    if title_filter:
+        tf = Filter.by_property("title").like(f"*{title_filter}*")
+        filt = (filt & tf) if filt else tf
+
+    if mode == "semantic":
+        try:
+            from langchain_ollama import OllamaEmbeddings  # type: ignore[import-untyped]
+            ollama_url = f"http://{_cfg['host']}:11434"
+            embeddings = OllamaEmbeddings(
+                model="nomic-embed-text:latest",
+                base_url=ollama_url,
+            )
+            qvec = embeddings.embed_query(query)
+        except Exception as e:
+            logger.warning("Ollama embedding failed, falling back to keyword: %s", e)
+            return search_acl2_docs(query, mode="keyword",
+                                    doc_type=doc_type,
+                                    title_filter=title_filter,
+                                    offset=offset, limit=limit)
+
+        kwargs: dict[str, Any] = {
+            "near_vector": qvec,
+            "limit": limit,
+            "offset": offset,
+            "return_metadata": MetadataQuery(distance=True),
+        }
+        if filt:
+            kwargs["filters"] = filt
+        resp = col.query.near_vector(**kwargs)
+    else:
+        kw_filt = Filter.by_property("text").like(f"*{query}*")
+        if filt:
+            kw_filt = kw_filt & filt
+        resp = col.query.fetch_objects(filters=kw_filt,
+                                       limit=limit, offset=offset)
+
+    results = []
+    for obj in resp.objects:
+        p = obj.properties
+        dist = getattr(obj.metadata, "distance", None) if obj.metadata else None
+        results.append({
+            "title": p.get("title", ""),
+            "source_path": p.get("source_path", ""),
+            "doc_type": p.get("doc_type", ""),
             "text": p.get("text", ""),
             "distance": dist,
         })

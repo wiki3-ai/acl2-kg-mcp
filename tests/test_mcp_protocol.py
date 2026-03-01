@@ -87,11 +87,12 @@ async def test_tools_list() -> None:
         assert "result" in resp
         tools = resp["result"]["tools"]
         names = {t["name"] for t in tools}
-        assert len(tools) == 9
+        assert len(tools) == 10
         assert "kg_stats" in names
         assert "kg_search" in names
         assert "kg_get_symbol" in names
         assert "kg_get_include_book" in names
+        assert "kg_search_acl2_docs" in names
     finally:
         proc.terminate()
         await proc.wait()

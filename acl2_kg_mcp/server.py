@@ -60,7 +60,8 @@ async def list_tools() -> list[Tool]:
                 "Unified ranked search across the ACL2 Knowledge Graph. "
                 "Search targets: symbol (ACL2 definitions), code (cell source code), "
                 "comment (markdown/comment cells), summary (LLM-generated summaries), "
-                "docs (academic papers from DoclingPapers). "
+                "docs (academic papers from DoclingPapers), "
+                "acl2_docs (READMEs, HTML, PDFs from the ACL2 source tree). "
                 "Results are ranked by semantic distance (semantic mode) or relevance (keyword mode). "
                 "Supports pagination via offset/limit."
             ),
@@ -73,9 +74,9 @@ async def list_tools() -> list[Tool]:
                     },
                     "target": {
                         "type": "string",
-                        "enum": ["symbol", "code", "comment", "summary", "docs"],
+                        "enum": ["symbol", "code", "comment", "summary", "docs", "acl2_docs"],
                         "default": "symbol",
-                        "description": "What to search: symbol, code, comment, summary, or docs",
+                        "description": "What to search: symbol, code, comment, summary, docs, or acl2_docs",
                     },
                     "mode": {
                         "type": "string",
@@ -307,6 +308,56 @@ async def list_tools() -> list[Tool]:
             annotations={"readOnlyHint": True},
         ),
         Tool(
+            name="kg_search_acl2_docs",
+            description=(
+                "Search ACL2 source tree documentation in the ACL2Docs collection. "
+                "Contains ~211K chunks from READMEs, HTML reference docs, and PDFs "
+                "(design notes, lecture slides, talks) from the ACL2 books directory. "
+                "Semantic search embeds the query via Ollama nomic-embed-text. "
+                "Supports filtering by doc_type (readme, html, pdf) and title. "
+                "Supports pagination."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query text",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["semantic", "keyword"],
+                        "default": "semantic",
+                        "description": "Search mode",
+                    },
+                    "doc_type": {
+                        "type": "string",
+                        "enum": ["readme", "html", "pdf"],
+                        "description": "Filter by document type",
+                    },
+                    "title_filter": {
+                        "type": "string",
+                        "description": "Filter by title substring",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 10,
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Max results per page",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "default": 0,
+                        "minimum": 0,
+                        "description": "Offset for pagination",
+                    },
+                },
+                "required": ["query"],
+            },
+            annotations={"readOnlyHint": True},
+        ),
+        Tool(
             name="kg_get_include_book",
             description=(
                 "Map an ACL2 notebook source file to its (include-book ...) form. "
@@ -374,10 +425,18 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     wc.search_docs(query, mode=mode,
                                    paper_filter=paper_filter,
                                    offset=offset, limit=limit))
+            elif target == "acl2_docs":
+                doc_type = arguments.get("doc_type")
+                title_filter = arguments.get("title_filter")
+                return _json_response(
+                    wc.search_acl2_docs(query, mode=mode,
+                                        doc_type=doc_type,
+                                        title_filter=title_filter,
+                                        offset=offset, limit=limit))
             else:
                 return _error_response(
                     f"Unknown search target: {target}. "
-                    "Use: symbol, code, comment, summary, or docs")
+                    "Use: symbol, code, comment, summary, docs, or acl2_docs")
 
         elif name == "kg_get_symbol":
             qn = arguments["qualified_name"]
@@ -445,6 +504,19 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
             return _json_response(
                 wc.search_docs(query, mode=mode, paper_filter=paper_filter,
                                offset=offset, limit=limit))
+
+        elif name == "kg_search_acl2_docs":
+            query = arguments["query"]
+            mode = arguments.get("mode", "semantic")
+            doc_type = arguments.get("doc_type")
+            title_filter = arguments.get("title_filter")
+            limit = min(int(arguments.get("limit", 10)), 100)
+            offset = max(int(arguments.get("offset", 0)), 0)
+
+            return _json_response(
+                wc.search_acl2_docs(query, mode=mode, doc_type=doc_type,
+                                    title_filter=title_filter,
+                                    offset=offset, limit=limit))
 
         elif name == "kg_get_include_book":
             source_file = arguments["source_file"]

@@ -40,14 +40,14 @@ def _parse(result: Any) -> dict:
 # ── list_tools ────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_list_tools_returns_nine() -> None:
+async def test_list_tools_returns_ten() -> None:
     tools = await list_tools()
-    assert len(tools) == 9
+    assert len(tools) == 10
     names = {t.name for t in tools}
     assert names == {
         "kg_stats", "kg_search", "kg_get_symbol", "kg_get_notebook",
         "kg_get_cell", "kg_get_summary", "kg_list_notebooks",
-        "kg_search_docs", "kg_get_include_book",
+        "kg_search_docs", "kg_search_acl2_docs", "kg_get_include_book",
     }
 
 @pytest.mark.asyncio
@@ -93,6 +93,17 @@ async def test_kg_search_docs_semantic() -> None:
         "mode": "semantic", "limit": 3,
     }))
     assert len(data["results"]) > 0
+
+@pytest.mark.asyncio
+async def test_kg_search_acl2_docs_via_unified() -> None:
+    data = _parse(await call_tool("kg_search", {
+        "query": "guard verification", "target": "acl2_docs",
+        "mode": "semantic", "limit": 3,
+    }))
+    assert len(data["results"]) > 0
+    for item in data["results"]:
+        assert "title" in item
+        assert "doc_type" in item
 
 @pytest.mark.asyncio
 async def test_kg_search_unknown_target() -> None:
@@ -271,6 +282,35 @@ async def test_kg_search_docs_keyword() -> None:
         "query": "ACL2", "mode": "keyword", "limit": 3,
     }))
     assert len(data["results"]) > 0
+
+
+# ── kg_search_acl2_docs ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_kg_search_acl2_docs() -> None:
+    data = _parse(await call_tool("kg_search_acl2_docs", {
+        "query": "guard verification", "mode": "semantic", "limit": 5,
+    }))
+    assert len(data["results"]) > 0
+    for item in data["results"]:
+        assert "title" in item
+        assert "source_path" in item
+        assert "doc_type" in item
+
+@pytest.mark.asyncio
+async def test_kg_search_acl2_docs_keyword() -> None:
+    data = _parse(await call_tool("kg_search_acl2_docs", {
+        "query": "defun", "mode": "keyword", "limit": 3,
+    }))
+    assert len(data["results"]) > 0
+
+@pytest.mark.asyncio
+async def test_kg_search_acl2_docs_doc_type_filter() -> None:
+    data = _parse(await call_tool("kg_search_acl2_docs", {
+        "query": "ACL2", "doc_type": "readme", "limit": 5,
+    }))
+    for item in data["results"]:
+        assert item["doc_type"] == "readme"
 
 
 # ── Error handling ────────────────────────────────────────────────────
