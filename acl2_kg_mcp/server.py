@@ -651,13 +651,54 @@ async def _run_tcp(port: int) -> None:
         await server.serve_forever()
 
 
+async def _run_sse(port: int) -> None:
+    """Run over HTTP + SSE transport (for LM Studio, Claude Desktop, etc.).
+
+    Exposes two endpoints:
+      GET  /sse        – SSE stream (client connects here)
+      POST /messages/  – client posts JSON-RPC messages here
+    """
+    from mcp.server.sse import SseServerTransport
+    import uvicorn
+
+    sse_transport = SseServerTransport("/messages/")
+
+    async def asgi_app(scope: dict, receive: Any, send: Any) -> None:
+        """Plain ASGI handler — avoids Starlette expecting a Response return value."""
+        if scope["type"] != "http":
+            return
+        path: str = scope.get("path", "")
+        method: str = scope.get("method", "GET")
+        if method == "GET" and path == "/sse":
+            async with sse_transport.connect_sse(scope, receive, send) as (read_stream, write_stream):
+                await app.run(
+                    read_stream,
+                    write_stream,
+                    app.create_initialization_options(),
+                )
+        elif path.startswith("/messages/"):
+            await sse_transport.handle_post_message(scope, receive, send)
+        else:
+            # 404 for anything else
+            await send({"type": "http.response.start", "status": 404, "headers": []})
+            await send({"type": "http.response.body", "body": b"Not found"})
+
+    config = uvicorn.Config(asgi_app, host="0.0.0.0", port=port, log_level="info")
+    server = uvicorn.Server(config)
+    logger.info("SSE MCP server listening on http://0.0.0.0:%d/sse", port)
+    await server.serve()
+
+
 def main() -> None:
     """Entry point: parse args and run the server."""
     parser = argparse.ArgumentParser(
         description="ACL2 Knowledge Graph MCP Server")
     parser.add_argument(
         "--tcp", type=int, default=None, metavar="PORT",
-        help="Run over TCP on the given port instead of stdio")
+        help="Run over raw TCP on the given port instead of stdio")
+    parser.add_argument(
+        "--sse", type=int, default=None, metavar="PORT",
+        help="Run over HTTP+SSE on the given port (for LM Studio, Claude Desktop, etc.)")
     parser.add_argument(
         "--weaviate-host", default=None,
         help="Override WEAVIATE_HOST env var")
@@ -690,7 +731,9 @@ def main() -> None:
     if hasattr(signal, "SIGPIPE"):
         signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
-    if args.tcp is not None:
+    if args.sse is not None:
+        asyncio.run(_run_sse(args.sse))
+    elif args.tcp is not None:
         asyncio.run(_run_tcp(args.tcp))
     else:
         asyncio.run(_run_stdio())
